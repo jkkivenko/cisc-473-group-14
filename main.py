@@ -27,7 +27,7 @@ train_loader = DataLoader(train_data, batch_size=8)
 test_loader = DataLoader(test_data, batch_size=8)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# input_tensor = input_tensor.to(device)
+input_tensor = torch.input_tensor.to(device)
 
 print("Generating model...")
 
