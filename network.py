@@ -1,5 +1,6 @@
+import torch
 import torch.nn as nn
-import torch.nn.functional as Fimport
+import torch.nn.functional as F
 
 # Define model
 class PainterNetwork(nn.Module):
@@ -39,8 +40,5 @@ class ConvolutionalNet(nn.Module):
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         return x
-
-
-net = Net()
 
 #https://docs.pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html
