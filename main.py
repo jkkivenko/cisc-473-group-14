@@ -2,7 +2,7 @@ from torch.utils.data import random_split, DataLoader
 from torchvision import datasets, transforms
 import torch
 
-from network import PainterNetwork
+from network import PainterNetwork, ConvolutionalNet
 
 print("Hello, Trajan!")
 
@@ -31,7 +31,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 print("Generating model...")
 
-model = PainterNetwork.to(device)
+network = ConvolutionalNet()
+
+model = network.to(device)
 
 print("Model generated:")
 print(model)
