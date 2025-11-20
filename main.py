@@ -3,50 +3,22 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 from torchvision import datasets, transforms
 
-from network import PerceptualLoss
+from loss import PerceptualLoss
+from network import NeuralPainter
+# from renderer import DifferentiableRenderer
 
 IMG_SIZE = 64
 BATCH_SIZE = 12
+DISPLAY_EVERY_N_EPOCHS = 300
 
 transform = transforms.Compose([
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
     transforms.ToTensor()
 ])
 
-dataset = datasets.ImageFolder("images/all_images", transform=transform)
+dataset = datasets.ImageFolder("images/coco/test_dataset", transform=transform)
 train_loader = torch.utils.data.DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-# -------------------------------
-# Neural Painter Network (multiple strokes)
-# -------------------------------
-class NeuralPainter(nn.Module):
-    def __init__(self, strokes_per_step=5):
-        super().__init__()
-        self.strokes_per_step = strokes_per_step
-
-        # Conv backbone: input = target+canvas (6 channels)
-        self.conv = nn.Sequential(
-            nn.Conv2d(6, 64, 3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 128, 3, padding=1),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool2d(1)
-        )
-
-        # FC: output = 6 parameters per stroke * strokes_per_step
-        self.fc = nn.Sequential(
-            nn.Linear(128, 256),
-            nn.ReLU(),
-            nn.Linear(256, 6 * strokes_per_step)
-        )
-
-    def forward(self, target_canvas):
-        B = target_canvas.size(0)
-        features = self.conv(target_canvas).view(B, -1)
-        stroke_params = self.fc(features)  # [B, 6 * N]
-        stroke_params = torch.sigmoid(stroke_params)  # keep values in [0,1]
-        return stroke_params
 
 # -------------------------------
 # Stroke rendering
@@ -118,7 +90,7 @@ def train_painter_multi(model, train_loader, num_epochs, optimizer, loss_fn, per
 
             optimizer.zero_grad()
 
-            for step in range(num_strokes):
+            for stroke_idx in range(num_strokes):
                 # Predict multiple strokes per image
                 stroke_params = model(torch.cat([images, canvas], dim=1))
                 B = images.size(0)
@@ -158,12 +130,12 @@ def train_painter_multi(model, train_loader, num_epochs, optimizer, loss_fn, per
 
         print(f"Epoch {epoch+1}/{num_epochs}, Loss: {loss.item():.4f}")
 
-        # Display progress every 5 epochs
-        if epoch % 300 == 0:
+        # Display progress after a certain number of epochs
+        if epoch % DISPLAY_EVERY_N_EPOCHS == 0:
             target_img = images[0].detach().cpu().permute(1,2,0).numpy()
             canvas_img = canvas[0].detach().cpu().permute(1,2,0).numpy()
 
-            fig, axs = plt.subplots(1,2,figsize=(8,4))
+            _, axs = plt.subplots(1,2,figsize=(8,4))
             axs[0].imshow(target_img)
             axs[0].set_title("Target")
             axs[0].axis('off')
@@ -172,18 +144,20 @@ def train_painter_multi(model, train_loader, num_epochs, optimizer, loss_fn, per
             axs[1].axis('off')
             plt.show()
 
-strokes_per_step = 5
-model = NeuralPainter(strokes_per_step=strokes_per_step).to(device)
-loss_fn = nn.MSELoss()
-perceptual_loss = PerceptualLoss()  # replace with your real perceptual loss
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-
 # -------------------------------
 # Train
 # -------------------------------
-num_epochs = 301
-num_strokes = 50
+if __name__ == "__main__":
+    strokes_per_step = 5
+    model = NeuralPainter(strokes_per_step=strokes_per_step).to(device)
+    loss_fn = nn.MSELoss()
+    perceptual_loss = PerceptualLoss()  # replace with your real perceptual loss
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-train_painter_multi(model, train_loader, num_epochs, optimizer, loss_fn,
-                    perceptual_loss, num_strokes=num_strokes,
-                    strokes_per_step=strokes_per_step, device=device)
+    num_epochs = 301
+    num_strokes = 50
+
+    print("Beginning training...")
+    train_painter_multi(model, train_loader, num_epochs, optimizer, loss_fn,
+                        perceptual_loss, num_strokes=num_strokes,
+                        strokes_per_step=strokes_per_step, device=device)
