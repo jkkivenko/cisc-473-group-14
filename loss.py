@@ -35,6 +35,9 @@ class PerceptualLoss(nn.Module):
             p.requires_grad = False  # freeze pretrained VGG
         self.weights = weights or [1.0] * len(self.layers)
 
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.to(device)
+
     def forward(self, input, target):
         """
         Both input and target must be normalized to [0,1] range.
@@ -52,3 +55,17 @@ class PerceptualLoss(nn.Module):
             target_norm = layer(target_norm)
             loss += w * nn.functional.mse_loss(input_norm, target_norm)
         return loss
+    
+
+class EarlyStopping:
+    def __init__(self, tolerance=5, min_delta=0):
+        self.tolerance = tolerance
+        self.min_delta = min_delta
+        self.counter = 0
+        self.early_stop = False
+
+    def __call__(self, train_loss, validation_loss):
+        if (validation_loss - train_loss) > self.min_delta:
+            self.counter += 1
+            if self.counter >= self.tolerance:
+                self.early_stop = True
