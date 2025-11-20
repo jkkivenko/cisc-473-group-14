@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
 from torchvision import datasets, transforms
+from torchmetrics.image import StructuralSimilarityIndexMeasure as SSIM, FrechetInceptionDistance as FID
 
 from loss import PerceptualLoss
 from network import NeuralPainter
@@ -83,6 +84,10 @@ def train_painter_multi(model, train_loader, num_epochs, optimizer, loss_fn, per
                         num_strokes=50, strokes_per_step=5, device='cuda', stroke_noise=False):
     model.to(device)
 
+    # Establish SSIM and FID metrics
+    ssim_metric = SSIM(data_range=1.0).to(device)
+    fid_metric = FID(feature=2048).to(device)
+
     for epoch in range(num_epochs):
         for batch_idx, (images, _) in enumerate(train_loader):
             images = images.to(device)
@@ -120,6 +125,17 @@ def train_painter_multi(model, train_loader, num_epochs, optimizer, loss_fn, per
                     # Render stroke
                     canvas = render_stroke(canvas, x.squeeze(1), y.squeeze(1), radius.squeeze(1), color)
 
+            # Update FID metric
+            real_batch = (images * 255).clamp(0,255).byte()
+            fake_batch = (canvas * 255).clamp(0,255).byte()
+            
+            fid_metric.update(real_batch, real=True)
+            fid_metric.update(fake_batch, real=False)
+
+            # There is a chance that the following is the correct formatting if this program doesn't handle Byte Tensors
+            # fid_metric.update(images.float(), real=True)
+            # fid_metric.update(canvas.float(), real=False)
+
             # Compute loss
             loss_pixel = loss_fn(canvas, images)
             loss_perceptual_val = perceptual_loss(canvas, images)
@@ -128,7 +144,16 @@ def train_painter_multi(model, train_loader, num_epochs, optimizer, loss_fn, per
             loss.backward()
             optimizer.step()
 
+        # Compute SSIM of the last batch and FID for the entire epoch
+        ssim_val = SSIM(data_range=1.0).to(device)(canvas, images).item()
+        fid_val = fid_metric.compute().item()
+        
+        # Print epoch metrics
         print(f"Epoch {epoch+1}/{num_epochs}, Loss: {loss.item():.4f}")
+        print(f"   SSIM: {ssim_val:.4f} | FID: {fid_val:.2f}")
+
+        # Reset FID for the next epoch
+        fid_metric.reset()
 
         # Display progress after a certain number of epochs
         if epoch % DISPLAY_EVERY_N_EPOCHS == 0:
