@@ -1,24 +1,27 @@
+import random
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, random_split
 from torchvision import datasets, transforms
-from torchmetrics.image import StructuralSimilarityIndexMeasure as SSIM, FrechetInceptionDistance as FID
+from torchmetrics.image import StructuralSimilarityIndexMeasure as SSIM
+from torchmetrics.image.fid import FrechetInceptionDistance as FID
 
 from loss import EarlyStopping, PerceptualLoss
 from network import NeuralPainter
-# from renderer import DifferentiableRenderer
+from renderer import Renderer
 
 IMG_SIZE = 64
 BATCH_SIZE = 12
-DISPLAY_EVERY_N_EPOCHS = 300
+DISPLAY_EVERY_N_EPOCHS = 1
+PERCEPTUAL_LOSS_AMOUNT = 0.5
 
 transform = transforms.Compose([
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
     transforms.ToTensor()
 ])
 
-dataset = datasets.ImageFolder("E:/coco copy/", transform=transform)
+dataset = datasets.ImageFolder("images/coco/test_dataset", transform=transform)
 
 train_size = int(0.8 * len(dataset))
 val_size = len(dataset) - train_size
@@ -27,93 +30,31 @@ train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=True)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-print(torch.cuda.is_available())
+# print(torch.cuda.is_available())
 early_stopping = EarlyStopping(tolerance=5, min_delta=10)
 
-# -------------------------------
-# Stroke rendering
-# -------------------------------
-
-def render_strokes_batch(canvas, stroke_params):
-    """
-    Vectorized multi-stroke rendering.
-
-    canvas: [B, C, H, W]
-    stroke_params: [B, N, 6] = (x, y, radius, r, g, b)
-    """
-    B, C, H, W = canvas.shape
-    N = stroke_params.size(1)
-    device = canvas.device
-
-    # Precompute meshgrid
-    yy, xx = torch.meshgrid(
-        torch.linspace(0, 1, H, device=device),
-        torch.linspace(0, 1, W, device=device),
-        indexing='ij'
-    )
-    xx = xx.unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
-    yy = yy.unsqueeze(0).unsqueeze(0)
-
-    # Stroke params
-    x = stroke_params[..., 0].unsqueeze(-1).unsqueeze(-1)
-    y = stroke_params[..., 1].unsqueeze(-1).unsqueeze(-1)
-    radius = stroke_params[..., 2].unsqueeze(-1).unsqueeze(-1)
-    color = stroke_params[..., 3:]  # [B,N,3]
-
-    # Clamp radius and elongate y
-    radius = radius.clamp(0.05, 0.25)
-    rx = radius
-    ry = (radius * 1.5).clamp(0.05, 0.35)
-
-    dx = xx - x
-    dy = yy - y
-
-    # Rotation (currently zero)
-    cos_a = torch.ones_like(dx)
-    sin_a = torch.zeros_like(dx)
-    xr = cos_a * dx + sin_a * dy
-    yr = -sin_a * dx + cos_a * dy
-
-    # Gaussian mask
-    mask = torch.exp(-(xr**2 / (2*rx**2) + yr**2 / (2*ry**2)))
-    mask = mask / mask.amax(dim=(-2, -1), keepdim=True)
-    mask = mask * 1.1
-
-    # Apply strokes sequentially
-    for n in range(N):
-        m = mask[:, n:n+1, :, :]
-        c = color[:, n, :].view(B, C, 1, 1)
-        canvas = canvas * (1 - m) + c * m
-
-    return canvas
-
-def train_one_epoch(model, train_loader, loss_fn, perceptual_loss, optimizer, num_strokes, strokes_per_step):
+def train_one_epoch(model, train_loader, loss_fn, perceptual_loss, optimizer, num_strokes):
     train_loss = 0
 
     # Establish SSIM and FID metrics
     fid_metric = FID(feature=2048).to(device)
     model.train()
+    # Initialize renderer
+    rend = Renderer(device)
     for batch_idx, (images, _) in enumerate(train_loader):
             images = images.to(device)
-            canvas = 0.5 * torch.ones_like(images).to(device)
-
+            batch_size = images.shape[0]
+            rend.initialize_canvas(batch_size)
             optimizer.zero_grad()
 
-            all_strokes = []
+            # Generate num_strokes strokes for each image
             for stroke_idx in range(num_strokes):
-                # Predict multiple strokes per image
-                stroke_params = model(torch.cat([images, canvas], dim=1))
-                B = images.size(0)
-                stroke_params = stroke_params.view(B, strokes_per_step, 6)  # [B, N, 6]
-                all_strokes.append(stroke_params)
-
-            all_strokes = torch.cat(all_strokes, dim=1)
-            # Render stroke
-            canvas = render_strokes_batch(canvas, all_strokes)
+                stroke_params = model(torch.cat([images, rend.canvas], dim=1))
+                rend.render_stroke(stroke_params)
 
             # Update FID metric
             real_batch = (images * 255).clamp(0,255).byte()
-            fake_batch = (canvas * 255).clamp(0,255).byte()
+            fake_batch = (rend.canvas * 255).clamp(0,255).byte()
             
             fid_metric.update(real_batch, real=True)
             fid_metric.update(fake_batch, real=False)
@@ -123,16 +64,16 @@ def train_one_epoch(model, train_loader, loss_fn, perceptual_loss, optimizer, nu
             # fid_metric.update(canvas.float(), real=False)
 
             # Compute loss
-            loss_pixel = loss_fn(canvas, images)
-            loss_perceptual_val = perceptual_loss(canvas, images)
-            loss = loss_pixel + 0.5 * loss_perceptual_val
+            loss_pixel = loss_fn(rend.canvas, images)
+            loss_perceptual_val = perceptual_loss(rend.canvas, images)
+            loss = (1-PERCEPTUAL_LOSS_AMOUNT) * 1000 * loss_pixel + PERCEPTUAL_LOSS_AMOUNT * loss_perceptual_val
 
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
 
     # Compute SSIM of the last batch and FID for the entire epoch
-    ssim_val = SSIM(data_range=1.0).to(device)(canvas, images).item()
+    ssim_val = SSIM(data_range=1.0).to(device)(rend.canvas, images).item()
     fid_val = fid_metric.compute().item()
     # Print SSIM / FID metrics for epoch
     print(f"   SSIM: {ssim_val:.4f} | FID: {fid_val:.2f}")
@@ -142,77 +83,155 @@ def train_one_epoch(model, train_loader, loss_fn, perceptual_loss, optimizer, nu
     
     return train_loss / len(train_loader)
 
-def validate_one_epoch(model, val_loader, loss_fn, perceptual_loss, num_strokes, strokes_per_step):
+def validate_one_epoch(model, val_loader, loss_fn, perceptual_loss, num_strokes):
     val_loss = 0
     model.eval()
+    # Initialize renderer
+    rend = Renderer(device)
     with torch.no_grad():
         for batch_idx, (images, _) in enumerate(val_loader):
                 print("Val: " + str(batch_idx))
                 images = images.to(device)
-                canvas = 0.5 * torch.ones_like(images).to(device)
-                all_strokes = []
+                batch_size = images.shape[0]
+                rend.initialize_canvas(batch_size)
                 for stroke_idx in range(num_strokes):
                     # Predict multiple strokes per image
-                    stroke_params = model(torch.cat([images, canvas], dim=1))
-                    B = images.size(0)
-                    stroke_params = stroke_params.view(B, strokes_per_step, 6)  # [B, N, 6]
-                    all_strokes.append(stroke_params)
-                    
-                all_strokes = torch.cat(all_strokes, dim=1)
-                canvas = render_strokes_batch(canvas, all_strokes)
+                    stroke_params = model(torch.cat([images, rend.canvas], dim=1))
+                    # print(f"{stroke_params=}")
+                    rend.render_stroke(stroke_params)
 
                 # Compute loss
-                loss_pixel = loss_fn(canvas, images)
-                loss_perceptual_val = perceptual_loss(canvas, images)
-                val_loss += loss_pixel + 0.5 * loss_perceptual_val
+                loss_pixel = loss_fn(rend.canvas, images)
+                loss_perceptual_val = perceptual_loss(rend.canvas, images)
+                val_loss = (1-PERCEPTUAL_LOSS_AMOUNT) * 1000 * loss_pixel + PERCEPTUAL_LOSS_AMOUNT * loss_perceptual_val
     return val_loss / len(val_loader)
 
 # -------------------------------
 # Training loop (multi-stroke)
 # -------------------------------
 def train_painter_multi(model, train_loader, val_loader, num_epochs, optimizer, loss_fn, perceptual_loss,
-                        num_strokes=50, strokes_per_step=5, stroke_noise=False):
+                        num_strokes=50, stroke_noise=False):
     model.to(device)
 
-    for epoch in range(num_epochs):
-        train_loss = train_one_epoch(model, train_loader, loss_fn, perceptual_loss, optimizer, num_strokes, strokes_per_step)
-        val_loss = validate_one_epoch(model, val_loader, loss_fn, perceptual_loss, num_strokes, strokes_per_step)
+    train_losses = []
+    val_losses = []
 
-        early_stopping(train_loss, val_loss)
-        if early_stopping.early_stop:
-             print("Stopping early to prevent overfitting")
-             break
+    loss_fig = plt.figure()
+    loss_axs = loss_fig.add_axes((0,0,1,1))
+    loss_axs.set_xlim(right=num_epochs)
+    loss_axs.plot(0)
+    _, canvas_axs = plt.subplots(1,3,figsize=(10,4))
+    canvas_axs[0].set_title("Target")
+    canvas_axs[0].axis('off')
+    canvas_axs[1].set_title("Model Output")
+    canvas_axs[1].axis('off')
+
+    for epoch in range(num_epochs):
+        train_loss = train_one_epoch(model, train_loader, loss_fn, perceptual_loss, optimizer, num_strokes)
+        val_loss = validate_one_epoch(model, val_loader, loss_fn, perceptual_loss, num_strokes)
+        train_losses.append(train_loss)
+        val_losses.append(val_loss)
+        loss_axs.plot(train_losses, label='Training Loss', color='blue', linestyle='-')
+        loss_axs.plot(val_losses, label='Validation Loss', color='red', linestyle='--')
+        loss_axs.plot()
+
+        # early_stopping(train_loss, val_loss)
+        # if early_stopping.early_stop:
+        #      print("Stopping early to prevent overfitting")
+        #      break
 
         print(f"Epoch {epoch+1}/{num_epochs}, Loss: {train_loss:.4f}")
 
         # Display progress after a certain number of epochs
-        # if epoch % DISPLAY_EVERY_N_EPOCHS == 0:
-        #     target_img = images[0].detach().cpu().permute(1,2,0).numpy()
-        #     canvas_img = canvas[0].detach().cpu().permute(1,2,0).numpy()
+        if epoch % DISPLAY_EVERY_N_EPOCHS == 0:
+            shown_image = random.choice(train_loader.dataset)[0]
+            shown_image = torch.unsqueeze(shown_image, 0) # simulates a batch size of 1
 
-        #     _, axs = plt.subplots(1,2,figsize=(8,4))
-        #     axs[0].imshow(target_img)
-        #     axs[0].set_title("Target")
-        #     axs[0].axis('off')
-        #     axs[1].imshow(canvas_img)
-        #     axs[1].set_title("Canvas")
-        #     axs[1].axis('off')
-        #     plt.show()
+            canvas_axs[2].clear()
+            canvas_axs[2].set_title("Rendered Output")
+            canvas_axs[2].axis('off')
+            canvas_axs[2].set_xlim(-32, 32)
+            canvas_axs[2].set_ylim(-32, 32)
+
+            canvas_axs[0].imshow(shown_image[0].permute(1,2,0).numpy())
+
+            rend = Renderer(device)
+            rend.initialize_canvas(1)
+            # Predict multiple strokes per image
+            for stroke_idx in range(num_strokes):
+                stroke_params = model(torch.cat([shown_image, rend.canvas], dim=1))
+                rend.render_stroke(stroke_params)
+                rend.render_nondifferentiable(canvas_axs[2], torch.squeeze(stroke_params))
+            canv = rend.canvas[0].detach().cpu().permute(1,2,0).numpy()
+            canvas_axs[1].imshow(canv)
+        plt.show(block=False)
+        plt.pause(0.5)
+
+
+def sanity_check_loss(stroke_params):
+    image = dataset[5][0]
+    loss_fn = nn.MSELoss().to(device)
+    perceptual_loss = PerceptualLoss().to(device)
+
+    _, canvas_axs = plt.subplots(1,3,figsize=(10,4))
+    canvas_axs[0].set_title("Target")
+    canvas_axs[0].axis('off')
+    canvas_axs[0].imshow(image.detach().cpu().permute(1,2,0).numpy())
+    canvas_axs[1].set_title("Model Output")
+    canvas_axs[1].axis('off')
+    canvas_axs[2].set_title("Rendered Output")
+    canvas_axs[2].axis('off')
+    canvas_axs[2].set_xlim(-32, 32)
+    canvas_axs[2].set_ylim(-32, 32)
+
+    rend = Renderer(device)
+    rend.initialize_canvas(1)
+
+    rend.render_stroke(stroke_params)
+    rend.render_nondifferentiable(canvas_axs[2], torch.squeeze(stroke_params))
+    stroke_params = torch.unsqueeze(stroke_params, 0) # simulating a batch size of 1
+    canv = rend.canvas[0].detach().cpu().permute(1,2,0).numpy()
+    canvas_axs[1].imshow(canv)
+
+    loss_pixel = loss_fn(rend.canvas, image.unsqueeze(0))
+    loss_perceptual_val = perceptual_loss(rend.canvas, image.unsqueeze(0))
+    loss = (1-PERCEPTUAL_LOSS_AMOUNT) * 1000 * loss_pixel + PERCEPTUAL_LOSS_AMOUNT * loss_perceptual_val
+
+    print(f"Loss is {loss} with stroke parameters {stroke_params}")
+    plt.show()
 
 # -------------------------------
 # Train
 # -------------------------------
 if __name__ == "__main__":
-    strokes_per_step = 5
-    model = NeuralPainter(strokes_per_step=strokes_per_step).to(device)
+    model = NeuralPainter().to(device)
     loss_fn = nn.MSELoss().to(device)
-    perceptual_loss = PerceptualLoss().to(device)  # replace with your real perceptual loss
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    perceptual_loss = PerceptualLoss().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
     num_epochs = 301
-    num_strokes = 50
+    num_strokes = 10
+
+    # # This proves that the loss/renderer is giving reasonable numbers (test image is a mostly white scene with a skiier)
+    # # Small red line
+    # sanity_check_loss(torch.tensor([[0.5, 0.5, 0.25, 0, 1, 0, 0, 1]])) # 1522
+    # # Small orange(?) line
+    # sanity_check_loss(torch.tensor([[0.5, 0.5, 0.25, 0, 0.682, 0.545, 0.227, 1]])) # 881
+    # # Big orange(?) line
+    # sanity_check_loss(torch.tensor([[0.5, 0.5, 1, 0, 0.682, 0.545, 0.227, 1]])) # 810
+    # # Big light orange(?) line
+    # sanity_check_loss(torch.tensor([[0.5, 0.5, 1, 0, 0.667, 0.596, 0.376, 1]])) # 739
+    # # All grey
+    # sanity_check_loss(torch.tensor([[0.5, 0.5, 1, 0, 0.5, 0.5, 0.5, 1]])) # 715
+    # # All white
+    # sanity_check_loss(torch.tensor([[0.5, 0.5, 1, 0, 1, 1, 1, 1]])) # 665
+    # # All white but with opacity 0
+    # sanity_check_loss(torch.tensor([[0.5, 0.5, 1, 0, 1, 1, 1, 0]])) # 665
+    # # All white but with scale 0
+    # sanity_check_loss(torch.tensor([[0.5, 0.5, 0.01, 0, 1, 1, 1, 1]])) # 665
+    # # All black
+    # sanity_check_loss(torch.tensor([[0.5, 0.5, 1, 0, 0, 0, 0, 1]])) # 1155
 
     print("Beginning training...")
     train_painter_multi(model, train_loader, val_loader, num_epochs, optimizer, loss_fn,
-                        perceptual_loss, num_strokes=num_strokes,
-                        strokes_per_step=strokes_per_step)
+                        perceptual_loss, num_strokes=num_strokes)
