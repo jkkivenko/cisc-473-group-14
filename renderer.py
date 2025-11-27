@@ -27,10 +27,10 @@ class Renderer():
         # Stroke params
         x = stroke_params[:, 0]
         y = stroke_params[:, 1]
-        scale = stroke_params[:, 2]
+        scale = stroke_params[:, 2] + 0.1 * (1.0 - stroke_params[:, 2]) # stops it from ever being 0, while also not messing with the gradient
         angle = stroke_params[:, 3] * 2 * torch.pi
-        color = stroke_params[:, 4:7]  # [B,3]
-        alpha = stroke_params[:, 7]
+        color = stroke_params[:, 4:7] # [B,3]
+        alpha = stroke_params[:, 7] + 0.9 * (1.0 - stroke_params[:, 7]) # this is temporary to stop the alpha from going below 0.9
 
         x = x[:, None, None]
         y = y[:, None, None]

@@ -9,13 +9,14 @@ class NeuralPainter(nn.Module):
     def __init__(self, stroke_size=8):
         super().__init__()
 
-        self.network = torchvision.models.resnet18(weights=torchvision.models.ResNet18_Weights.IMAGENET1K_V1)
+        self.network = torchvision.models.resnet18()
         
         out_channels = self.network.conv1.out_channels
         self.network.conv1 = nn.Conv2d(6, out_channels, 7, stride=2)
 
         num_features = self.network.fc.in_features
         self.network.fc = nn.Linear(num_features, stroke_size)
+        self.sigmoid = nn.Sigmoid()
 
         # # Conv backbone: input = target+canvas (6 channels)
         # self.conv = nn.Sequential(
@@ -38,7 +39,8 @@ class NeuralPainter(nn.Module):
         # features = self.conv(target_canvas).view(B, -1)
         # stroke_params = self.fc(features)  # [B, 6 * N]
         stroke_params = self.network(target_canvas)
-        stroke_params = torch.sigmoid(stroke_params)  # keep values in [0,1]
+        stroke_params = self.sigmoid(stroke_params)  # keep values in [0,1]
+        # stroke_params = torch.clamp(stroke_params, 0, 1)
 
         # stroke_params[:,3] += torch.ones_like(stroke_params[:,3]) * 0.001 # Do not let scale be zero or else everything breaks
 

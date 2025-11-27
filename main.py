@@ -14,7 +14,7 @@ from renderer import Renderer
 IMG_SIZE = 64
 BATCH_SIZE = 12
 DISPLAY_EVERY_N_EPOCHS = 1
-PERCEPTUAL_LOSS_AMOUNT = 0.5
+PERCEPTUAL_LOSS_AMOUNT = 0.1
 
 transform = transforms.Compose([
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
@@ -160,6 +160,7 @@ def train_painter_multi(model, train_loader, val_loader, num_epochs, optimizer, 
             # Predict multiple strokes per image
             for stroke_idx in range(num_strokes):
                 stroke_params = model(torch.cat([shown_image, rend.canvas], dim=1))
+                print(stroke_params)
                 rend.render_stroke(stroke_params)
                 rend.render_nondifferentiable(canvas_axs[2], torch.squeeze(stroke_params))
             canv = rend.canvas[0].detach().cpu().permute(1,2,0).numpy()
@@ -231,6 +232,8 @@ if __name__ == "__main__":
     # sanity_check_loss(torch.tensor([[0.5, 0.5, 0.01, 0, 1, 1, 1, 1]])) # 665
     # # All black
     # sanity_check_loss(torch.tensor([[0.5, 0.5, 1, 0, 0, 0, 0, 1]])) # 1155
+    # sanity_check_loss(torch.tensor([[0.9710, 0.4963, 0.9875, 0.7357, 0.7595, 0.6755, 0.7317, 0.1268]])) # 1155
+    # sanity_check_loss(torch.tensor([[0.9710, 0.4963, 0.1, 0.7357, 0.7595, 0.6755, 0.7317, 0.1268]])) # 1155
 
     print("Beginning training...")
     train_painter_multi(model, train_loader, val_loader, num_epochs, optimizer, loss_fn,
