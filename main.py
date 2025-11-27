@@ -14,7 +14,7 @@ from renderer import Renderer
 IMG_SIZE = 64
 BATCH_SIZE = 12
 DISPLAY_EVERY_N_EPOCHS = 1
-PERCEPTUAL_LOSS_AMOUNT = 0.1
+PERCEPTUAL_LOSS_AMOUNT = 0.15
 
 transform = transforms.Compose([
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
@@ -43,8 +43,7 @@ def train_one_epoch(model, train_loader, loss_fn, perceptual_loss, optimizer, nu
     rend = Renderer(device)
     for batch_idx, (images, _) in enumerate(train_loader):
             images = images.to(device)
-            batch_size = images.shape[0]
-            rend.initialize_canvas(batch_size)
+            rend.initialize_canvas(images)
             optimizer.zero_grad()
 
             # Generate num_strokes strokes for each image
@@ -92,8 +91,7 @@ def validate_one_epoch(model, val_loader, loss_fn, perceptual_loss, num_strokes)
         for batch_idx, (images, _) in enumerate(val_loader):
                 print("Val: " + str(batch_idx))
                 images = images.to(device)
-                batch_size = images.shape[0]
-                rend.initialize_canvas(batch_size)
+                rend.initialize_canvas(images)
                 for stroke_idx in range(num_strokes):
                     # Predict multiple strokes per image
                     stroke_params = model(torch.cat([images, rend.canvas], dim=1))
@@ -123,7 +121,7 @@ def train_painter_multi(model, train_loader, val_loader, num_epochs, optimizer, 
     _, canvas_axs = plt.subplots(1,3,figsize=(10,4))
     canvas_axs[0].set_title("Target")
     canvas_axs[0].axis('off')
-    canvas_axs[1].set_title("Model Output")
+    canvas_axs[1].set_title("Model View")
     canvas_axs[1].axis('off')
 
     for epoch in range(num_epochs):
@@ -156,7 +154,8 @@ def train_painter_multi(model, train_loader, val_loader, num_epochs, optimizer, 
             canvas_axs[0].imshow(shown_image[0].permute(1,2,0).numpy())
 
             rend = Renderer(device)
-            rend.initialize_canvas(1)
+            rend.initialize_canvas(shown_image)
+            rend.initialize_nondiff_canvas(canvas_axs[2], shown_image)
             # Predict multiple strokes per image
             for stroke_idx in range(num_strokes):
                 stroke_params = model(torch.cat([shown_image, rend.canvas], dim=1))
@@ -165,7 +164,7 @@ def train_painter_multi(model, train_loader, val_loader, num_epochs, optimizer, 
                 rend.render_nondifferentiable(canvas_axs[2], torch.squeeze(stroke_params))
             canv = rend.canvas[0].detach().cpu().permute(1,2,0).numpy()
             canvas_axs[1].imshow(canv)
-        plt.show(block=False)
+        plt.show(block=(epoch>290))
         plt.pause(0.5)
 
 
@@ -186,16 +185,17 @@ def sanity_check_loss(stroke_params):
     canvas_axs[2].set_ylim(-32, 32)
 
     rend = Renderer(device)
-    rend.initialize_canvas(1)
+    image = torch.unsqueeze(image, 0)
+    rend.initialize_canvas(image)
+    rend.initialize_nondiff_canvas(canvas_axs[2], image)
 
     rend.render_stroke(stroke_params)
     rend.render_nondifferentiable(canvas_axs[2], torch.squeeze(stroke_params))
-    stroke_params = torch.unsqueeze(stroke_params, 0) # simulating a batch size of 1
     canv = rend.canvas[0].detach().cpu().permute(1,2,0).numpy()
     canvas_axs[1].imshow(canv)
 
-    loss_pixel = loss_fn(rend.canvas, image.unsqueeze(0))
-    loss_perceptual_val = perceptual_loss(rend.canvas, image.unsqueeze(0))
+    loss_pixel = loss_fn(rend.canvas, image)
+    loss_perceptual_val = perceptual_loss(rend.canvas, image)
     loss = (1-PERCEPTUAL_LOSS_AMOUNT) * 1000 * loss_pixel + PERCEPTUAL_LOSS_AMOUNT * loss_perceptual_val
 
     print(f"Loss is {loss} with stroke parameters {stroke_params}")
@@ -208,12 +208,12 @@ if __name__ == "__main__":
     model = NeuralPainter().to(device)
     loss_fn = nn.MSELoss().to(device)
     perceptual_loss = PerceptualLoss().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=5e-6)
 
     num_epochs = 301
-    num_strokes = 10
+    num_strokes = 3
 
-    # # This proves that the loss/renderer is giving reasonable numbers (test image is a mostly white scene with a skiier)
+    # # This proves that the loss/renderer is giving reasonable numbers (when the test image is a mostly white scene with a skiier)
     # # Small red line
     # sanity_check_loss(torch.tensor([[0.5, 0.5, 0.25, 0, 1, 0, 0, 1]])) # 1522
     # # Small orange(?) line

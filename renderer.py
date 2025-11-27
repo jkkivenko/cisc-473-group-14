@@ -6,7 +6,15 @@ import torch
 from PIL import Image
 from scipy.ndimage import rotate
 
+# If you're seeing NaNs in the network outputs, it's probably because a stroke was rendered that was so small or so transparent that it did not
+# affect a single pixel. That can be fixed by increasing the scale or alpha offset, which causes the stroke to be rendered regardless
+SCALE_OFFSET = 0.01
+SCALE_SCALING = 0.5
+ALPHA_OFFSET = 0.2
+ALPHA_SCALING = 0.8
+
 class Renderer():
+
 
     def __init__(self, device, height=64, width=64):
         # Precompute meshgrid
@@ -27,10 +35,10 @@ class Renderer():
         # Stroke params
         x = stroke_params[:, 0]
         y = stroke_params[:, 1]
-        scale = stroke_params[:, 2] + 0.1 * (1.0 - stroke_params[:, 2]) # stops it from ever being 0, while also not messing with the gradient
+        scale = SCALE_OFFSET + SCALE_SCALING * stroke_params[:, 2] # stops it from ever being 0, while also not messing with the gradient by clamping
         angle = stroke_params[:, 3] * 2 * torch.pi
         color = stroke_params[:, 4:7] # [B,3]
-        alpha = stroke_params[:, 7] + 0.9 * (1.0 - stroke_params[:, 7]) # this is temporary to stop the alpha from going below 0.9
+        alpha = ALPHA_OFFSET + ALPHA_SCALING * stroke_params[:, 7] # stops it from just generating invisible strokes
 
         x = x[:, None, None]
         y = y[:, None, None]
@@ -62,45 +70,53 @@ class Renderer():
         # Apply stroke
         self.canvas = self.canvas * (1 - mask) + color * mask
 
-    def initialize_canvas(self, batch_size):
-        self.canvas = torch.ones((batch_size, 3, 64, 64)).to(self.device)
+    def initialize_canvas(self, images):
+        B, _, _, _ = images.shape
+        # Initialize the canvas with the averages of the images used instead of pure white
+        means = torch.mean(images, (2,3)).view(B, 3, 1, 1).repeat((1, 1, 64, 64))
+        self.canvas = means.to(self.device)
+
+    def initialize_nondiff_canvas(self, ax, image):
+        means = torch.mean(image, (2,3)).view(3, 1, 1).repeat((1, 64, 64))
+        background = means.detach().cpu().permute(1,2,0).numpy()
+        ax.imshow(background, extent=(-32, 32, 32, -32), aspect="equal", origin="lower")
 
 
     def render_nondifferentiable(self, ax, stroke_params, stroke_fp="strokes/simple_stroke.png"):
         # First we load the stroke image from the file
-        img = Image.open(stroke_fp).convert("RGBA")
+        stroke_img = Image.open(stroke_fp).convert("RGBA")
         x = stroke_params[0].item() * 64 - 32
         y = -stroke_params[1].item() * 64 + 32
-        scale = stroke_params[2].item() * 0.4
+        scale = SCALE_OFFSET + SCALE_SCALING * (stroke_params[2].item() * 0.4)
         angle = -(stroke_params[3].item() * 360) + 90
         r = stroke_params[4].item() * 255
         g = stroke_params[5].item() * 255
         b = stroke_params[6].item() * 255
-        alpha = stroke_params[7].item()
+        alpha = ALPHA_OFFSET + ALPHA_SCALING * stroke_params[7].item()
         # Then rotate the stroke image by the given angle
-        img = rotate(img, angle, reshape=True)
+        stroke_img = rotate(stroke_img, angle, reshape=True)
         # In order to recolor the stroke image, need to convert it to a numpy array and manually set the rgb values (leaving the alpha value alone for now)
-        img_array = np.asarray(img)
-        img_array[:, :, 0] = r
-        img_array[:, :, 1] = g
-        img_array[:, :, 2] = b
-        img = Image.fromarray(img_array, "RGBA")
+        stroke_img_array = np.asarray(stroke_img)
+        stroke_img_array[:, :, 0] = r
+        stroke_img_array[:, :, 1] = g
+        stroke_img_array[:, :, 2] = b
+        stroke_img = Image.fromarray(stroke_img_array, "RGBA")
         # Then we calculate the position and size of the stroke image
-        x_size = img_array.shape[1]
-        y_size = img_array.shape[0]
+        x_size = stroke_img_array.shape[1]
+        y_size = stroke_img_array.shape[0]
         x_start = x - (scale * x_size / 2)
         y_start = y - (scale * y_size / 2)
         x_end = x + (scale * x_size / 2)
         y_end = y + (scale * y_size / 2)
         # Finally, show the image. Note that we apply alpha at this step because it's easier
-        ax.imshow(img, extent=(x_start, x_end, y_end, y_start), alpha=alpha, aspect="equal", origin="lower")
+        ax.imshow(stroke_img, extent=(x_start, x_end, y_end, y_start), alpha=alpha, aspect="equal", origin="lower")
 
 # You can run this file to see how the differentiable renderer compares to the non-differentiable one
 if __name__ == "__main__":
     num_strokes = 2
     rend = Renderer("cpu")
     while True:
-        rend.initialize_canvas(1)
+        rend.initialize_canvas(1) # doesn't wrok. sorry
         _, canvas_axs = plt.subplots(1,2,figsize=(8,4))
         canvas_axs[1].set_xlim(-32, 32)
         canvas_axs[1].set_ylim(-32, 32)
