@@ -14,7 +14,7 @@ from renderer import Renderer
 IMG_SIZE = 64
 BATCH_SIZE = 12
 DISPLAY_EVERY_N_EPOCHS = 1
-PERCEPTUAL_LOSS_AMOUNT = 0.15
+PERCEPTUAL_LOSS_AMOUNT = 0.2
 
 transform = transforms.Compose([
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
@@ -208,12 +208,13 @@ if __name__ == "__main__":
     model = NeuralPainter().to(device)
     loss_fn = nn.MSELoss().to(device)
     perceptual_loss = PerceptualLoss().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=5e-6)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
 
     num_epochs = 301
     num_strokes = 3
 
     # # This proves that the loss/renderer is giving reasonable numbers (when the test image is a mostly white scene with a skiier)
+    # Most of these were made before the x1y1 change so they don't work anymore
     # # Small red line
     # sanity_check_loss(torch.tensor([[0.5, 0.5, 0.25, 0, 1, 0, 0, 1]])) # 1522
     # # Small orange(?) line
