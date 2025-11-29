@@ -69,3 +69,33 @@ class EarlyStopping:
             self.counter += 1
             if self.counter >= self.tolerance:
                 self.early_stop = True
+
+def stroke_loss(strokes):
+    def distance(x1, y1, x2, y2):
+        return torch.sqrt(torch.square(x2-x1) + torch.square(y2-y1))
+
+    # strokes is an array of tensors of size B x stroke_size
+    # So we iterate over every stroke and compare it to every other stroke
+    loss = torch.zeros((strokes[0].shape[0])) # B
+    for i in range(len(strokes)):
+        stroke_x1 = strokes[i][:, 0] # Bx1
+        stroke_y1 = strokes[i][:, 1] # Bx1
+        stroke_x2 = strokes[i][:, 2] # Bx1
+        stroke_y2 = strokes[i][:, 3] # Bx1
+        for j in range(i):
+            other_stroke_x1 = strokes[j][:, 0] # Bx1
+            other_stroke_y1 = strokes[j][:, 1] # Bx1
+            other_stroke_x2 = strokes[j][:, 2] # Bx1
+            other_stroke_y2 = strokes[j][:, 3] # Bx1
+
+            # For every comparison, we calculate the distance between the strokes by comparing their p1 and p2 coordinates
+            # We have to do it twice to account for the case where a stroke is facing the opposite direction
+            # I didn't do a great job of explaining that - see this desmos graph for a more intuitive understanding
+            # https://www.desmos.com/calculator/5yzykiijwx
+            # By the way, both d1 and d2 are of size Bx1
+            
+            d1 = distance(stroke_x1, stroke_y1, other_stroke_x2, other_stroke_y2) + distance(stroke_x2, stroke_y2, other_stroke_x1, other_stroke_y1)
+            d2 = distance(stroke_x1, stroke_y1, other_stroke_x1, other_stroke_y1) + distance(stroke_x2, stroke_y2, other_stroke_x2, other_stroke_y2)
+
+            loss += 1.0 / (torch.minimum(d1, d2) + 0.01) # plus epsilon so no division by zero
+    return torch.sum(loss)

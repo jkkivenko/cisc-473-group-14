@@ -10,6 +10,7 @@ from scipy.ndimage import rotate
 # affect a single pixel. That can be fixed by increasing the scale or alpha offset, which causes the stroke to be rendered regardless
 ALPHA_OFFSET = 0.2
 ALPHA_SCALING = 0.8
+STROKE_SQUISHING_FACTOR = 5
 
 class Renderer():
 
@@ -53,6 +54,7 @@ class Renderer():
         # I hate math
         radius = torch.sqrt(torch.square(x2-x1) + torch.square(y2-y1))
         ellipse_distance = torch.sqrt(torch.square(dx1) + torch.square(dy1)) + torch.sqrt(torch.square(dx2) + torch.square(dy2)) - radius
+        ellipse_distance *= STROKE_SQUISHING_FACTOR
         
         sigma = 0.2
             

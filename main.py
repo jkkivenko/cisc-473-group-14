@@ -7,16 +7,16 @@ from torchvision import datasets, transforms
 from torchmetrics.image import StructuralSimilarityIndexMeasure as SSIM
 from torchmetrics.image.fid import FrechetInceptionDistance as FID
 
-from loss import EarlyStopping, PerceptualLoss
+from loss import EarlyStopping, PerceptualLoss, stroke_loss
 from network import NeuralPainter
 from renderer import Renderer
 
 IMG_SIZE = 64
 BATCH_SIZE = 12
 DISPLAY_EVERY_N_EPOCHS = 1
-STROKE_LOSS_AMOUNT = 1
-PIXEL_LOSS_AMOUNT = 2500
-PERCEPTUAL_LOSS_AMOUNT = 0.12
+STROKE_LOSS_AMOUNT = 0.08
+PIXEL_LOSS_AMOUNT = 3000
+PERCEPTUAL_LOSS_AMOUNT = 0
 
 transform = transforms.Compose([
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
@@ -34,38 +34,6 @@ val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=True)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # print(torch.cuda.is_available())
 early_stopping = EarlyStopping(tolerance=5, min_delta=10)
-
-def stroke_loss(strokes):
-
-    def distance(x1, y1, x2, y2):
-        return torch.sqrt(torch.square(x2-x1) + torch.square(y2-y1))
-
-    # strokes is an array of tensors of size B x stroke_size
-    # So we iterate over every stroke and compare it to every other stroke
-    loss = torch.zeros((strokes[0].shape[0])) # B
-    for i in range(len(strokes)):
-        stroke_x1 = strokes[i][:, 0] # Bx1
-        stroke_y1 = strokes[i][:, 1] # Bx1
-        stroke_x2 = strokes[i][:, 2] # Bx1
-        stroke_y2 = strokes[i][:, 3] # Bx1
-        for j in range(i):
-            other_stroke_x1 = strokes[j][:, 0] # Bx1
-            other_stroke_y1 = strokes[j][:, 1] # Bx1
-            other_stroke_x2 = strokes[j][:, 2] # Bx1
-            other_stroke_y2 = strokes[j][:, 3] # Bx1
-
-            # For every comparison, we calculate the distance between the strokes by comparing their p1 and p2 coordinates
-            # We have to do it twice to account for the case where a stroke is facing the opposite direction
-            # I didn't do a great job of explaining that - see this desmos graph for a more intuitive understanding
-            # https://www.desmos.com/calculator/5yzykiijwx
-            # By the way, both d1 and d2 are of size Bx1
-            
-            d1 = distance(stroke_x1, stroke_y1, other_stroke_x2, other_stroke_y2) + distance(stroke_x2, stroke_y2, other_stroke_x1, other_stroke_y1)
-            d2 = distance(stroke_x1, stroke_y1, other_stroke_x1, other_stroke_y1) + distance(stroke_x2, stroke_y2, other_stroke_x2, other_stroke_y2)
-
-            loss += 1.0 / (torch.minimum(d1, d2) + 0.01) # plus epsilon so no division by zero
-    return torch.sum(loss)
-
 
 def train_one_epoch(model, train_loader, loss_fn, perceptual_loss, optimizer, num_strokes):
     train_loss = 0
@@ -101,12 +69,12 @@ def train_one_epoch(model, train_loader, loss_fn, perceptual_loss, optimizer, nu
 
             # Compute loss
             loss_pixel = loss_fn(rend.canvas, images) * PIXEL_LOSS_AMOUNT
-            loss_perceptual_val = perceptual_loss(rend.canvas, images) * PERCEPTUAL_LOSS_AMOUNT
+            # loss_perceptual_val = perceptual_loss(rend.canvas, images) * PERCEPTUAL_LOSS_AMOUNT
             loss_stroke = stroke_loss(strokes) * STROKE_LOSS_AMOUNT
             print(f"{loss_pixel=}")
-            print(f"{loss_perceptual_val=}")
+            # print(f"{loss_perceptual_val=}")
             print(f"{loss_stroke=}")
-            loss = loss_stroke + loss_pixel + loss_perceptual_val
+            loss = loss_stroke + loss_pixel# + loss_perceptual_val
 
             loss.backward()
             optimizer.step()
@@ -145,9 +113,9 @@ def validate_one_epoch(model, val_loader, loss_fn, perceptual_loss, num_strokes)
 
                 # Compute loss
                 loss_pixel = loss_fn(rend.canvas, images)
-                loss_perceptual_val = perceptual_loss(rend.canvas, images)
+                # loss_perceptual_val = perceptual_loss(rend.canvas, images)
                 loss_stroke = stroke_loss(strokes)
-                val_loss = STROKE_LOSS_AMOUNT * loss_stroke + PIXEL_LOSS_AMOUNT * loss_pixel + PERCEPTUAL_LOSS_AMOUNT * loss_perceptual_val
+                val_loss += STROKE_LOSS_AMOUNT * loss_stroke + PIXEL_LOSS_AMOUNT * loss_pixel# + PERCEPTUAL_LOSS_AMOUNT * loss_perceptual_val
     return val_loss / len(val_loader)
 
 # -------------------------------
@@ -241,9 +209,9 @@ def sanity_check_loss(stroke_params):
     canvas_axs[1].imshow(canv)
 
     loss_pixel = loss_fn(rend.canvas, image)
-    loss_perceptual_val = perceptual_loss(rend.canvas, image)
+    # loss_perceptual_val = perceptual_loss(rend.canvas, image)
     loss_stroke = stroke_loss([stroke_params]) # should always be zero because we just have one stroke
-    loss = STROKE_LOSS_AMOUNT * loss_stroke + PIXEL_LOSS_AMOUNT * loss_pixel + PERCEPTUAL_LOSS_AMOUNT * loss_perceptual_val
+    loss = STROKE_LOSS_AMOUNT * loss_stroke + PIXEL_LOSS_AMOUNT * loss_pixel# + PERCEPTUAL_LOSS_AMOUNT * loss_perceptual_val
 
     print(f"Loss is {loss} with stroke parameters {stroke_params}")
     plt.show()
