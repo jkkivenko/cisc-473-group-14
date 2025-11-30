@@ -1,14 +1,17 @@
 # cisc-473-group-14
-idk
 
-# TODO
+Run train.py to train a network.
 
-New structure idea: Inputs are source image and our image *so far*, the network predicts only the next stroke.
+~~~
+pyhton3 train.py NUM_EPOCHS NUM_STROKES
+~~~
 
-**Pros**
+This automatically saves it to a file at models/[NUM_EPOCHS]_[NUM_STROKES]
 
-Can have an arbitrary number of strokes
+To run inference, use:
 
-**Cons**
+~~~
+python3 test.py MODEL_FILEPATH IMAGE_FOLDER_FILEPATH NUM_STROKES
+~~~
 
-Comparing an incomplete image to the source image might give loss numbers
+Note that, as per pytorch standard, the image folder filepath should contain a subfolder which contains the images. The folder at IMAGE_FOLDER_FILEPATH should *not* contain the images themselves.
