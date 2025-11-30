@@ -34,7 +34,7 @@ if __name__ == "__main__":
             dataset = datasets.ImageFolder(img_folder_filepath, transform=transform)
             loader = DataLoader(dataset, batch_size=1, shuffle=False)
 
-            model = torch.load(f, weights_only=False).to(device)
+            model = torch.load(f, weights_only=False, map_location=device).to(device)
 
             for (image, _) in loader:
 
