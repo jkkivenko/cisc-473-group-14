@@ -10,7 +10,7 @@ from scipy.ndimage import rotate
 # affect a single pixel. That can be fixed by increasing the scale or alpha offset, which causes the stroke to be rendered regardless
 ALPHA_OFFSET = 0.2
 ALPHA_SCALING = 0.8
-STROKE_SQUISHING_FACTOR = 5
+STROKE_SQUISHING_FACTOR = 2
 
 class Renderer():
 
